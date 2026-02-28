@@ -35,12 +35,31 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm libbpf-dev libelf-dev linux-tools-common
+
+          # Use the real bpftool binary under /usr/lib/linux-tools* and avoid distro wrapper.
+          BPFTOOL_BIN="$(dpkg -L linux-tools-common 2>/dev/null \
+            | grep -E '/bpftool$' \
+            | grep -v '/usr/sbin/bpftool$' \
+            | head -n1)"
+          if [ -z "$BPFTOOL_BIN" ]; then
+            BPFTOOL_BIN="$(find /usr/lib -path '*/linux-tools*/bpftool' -executable 2>/dev/null | head -n1)"
+          fi
+          if [ -z "$BPFTOOL_BIN" ] || [ ! -x "$BPFTOOL_BIN" ]; then
+            echo "bpftool binary not found under linux-tools-common" >&2
+            dpkg -L linux-tools-common 2>/dev/null | grep -E 'bpftool|linux-tools' || true
+            exit 1
+          fi
+
+          sudo ln -sf "$BPFTOOL_BIN" /usr/local/bin/bpftool
+          echo "BPFTOOL=$BPFTOOL_BIN" >> "$GITHUB_ENV"
+          "$BPFTOOL_BIN" version
       - name: eBPF preflight
         run: |
           test -r /sys/kernel/btf/vmlinux
           grep -q "cgroup2" /proc/mounts
-          bpftool version >/dev/null
+          "$BPFTOOL" version >/dev/null
       - name: Run eBPF smoke tests
         run: |
           sudo -E go test -tags=ebpf -run 'TestVerifierLoad|TestTracepointAttach' ./iomonitor/ebpf/...
